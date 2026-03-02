@@ -3,9 +3,7 @@ import json
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from scrapling import Fetcher, StealthyFetcher
-from scrapling.tools import get_async_engine
-import asyncio
+from scrapling import Fetcher
 import logging
 
 app = Flask(__name__)
@@ -17,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class ScraplingCrawler:
     def __init__(self):
-        self.fetcher = StealthyFetcher()
+        self.fetcher = Fetcher()
         
     def _classify_url(self, url):
         """Classify URL based on path patterns"""
@@ -39,35 +37,44 @@ class ScraplingCrawler:
         
         return 'other'
     
-    async def crawl_page(self, url):
+    def crawl_page(self, url):
         """Crawl a single page using Scrapling"""
         try:
             logger.info(f"Crawling: {url}")
             result = self.fetcher.get(url)
             
             if result.status_code == 200:
-                # Extract content using Scrapling's built-in methods
-                title = result.soup.title.string if result.soup.title else ''
+                # Extract content using Scrapling's result object
+                title = ""
+                description = ""
+                content = ""
+                links = []
                 
-                # Get meta description
-                meta_desc = result.soup.find('meta', attrs={'name': 'description'})
-                description = meta_desc.get('content', '') if meta_desc else ''
-                
-                # Get clean text content
-                for script in result.soup(["script", "style"]):
-                    script.decompose()
-                content = result.soup.get_text()
-                content = ' '.join(content.split())  # Clean whitespace
+                # Try to extract title
+                if hasattr(result, 'soup') and result.soup:
+                    title_tag = result.soup.find('title')
+                    if title_tag:
+                        title = title_tag.get_text().strip()
+                    
+                    # Get meta description
+                    meta_desc = result.soup.find('meta', attrs={'name': 'description'})
+                    if meta_desc:
+                        description = meta_desc.get('content', '')
+                    
+                    # Get clean text content
+                    for script in result.soup(["script", "style"]):
+                        script.decompose()
+                    content = result.soup.get_text()
+                    content = ' '.join(content.split())  # Clean whitespace
+                    
+                    # Extract links
+                    for link in result.soup.find_all('a', href=True):
+                        href = link['href']
+                        if href.startswith('http') and url.split('/')[2] in href:
+                            links.append(href)
                 
                 # Classify URL
                 category = self._classify_url(url)
-                
-                # Extract links
-                links = []
-                for link in result.soup.find_all('a', href=True):
-                    href = link['href']
-                    if href.startswith('http') and url.split('/')[2] in href:
-                        links.append(href)
                 
                 return {
                     'url': url,
@@ -87,7 +94,7 @@ class ScraplingCrawler:
             logger.error(f"Error crawling {url}: {str(e)}")
             return None
     
-    async def crawl_site(self, start_url, max_pages=20):
+    def crawl_site(self, start_url, max_pages=20):
         """Crawl entire site using Scrapling"""
         logger.info(f"Starting Scrapling crawl of {start_url}, max pages: {max_pages}")
         
@@ -96,24 +103,22 @@ class ScraplingCrawler:
         seen = set([start_url])
         
         while to_crawl and len(crawled) < max_pages:
-            # Process multiple pages concurrently
-            batch_size = min(3, len(to_crawl), max_pages - len(crawled))
-            current_batch = to_crawl[:batch_size]
-            to_crawl = to_crawl[batch_size:]
+            url = to_crawl.pop(0)
             
-            # Crawl batch concurrently
-            tasks = [self.crawl_page(url) for url in current_batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            if url in seen:
+                continue
+                
+            seen.add(url)
             
-            for result in results:
-                if isinstance(result, dict) and result:
-                    crawled.append(result)
-                    
-                    # Add new links to crawl queue
-                    for link in result['links']:
-                        if link not in seen and len(to_crawl) + len(crawled) < max_pages:
-                            to_crawl.append(link)
-                            seen.add(link)
+            page_data = self.crawl_page(url)
+            
+            if page_data:
+                crawled.append(page_data)
+                
+                # Add new links to crawl queue
+                for link in page_data['links']:
+                    if link not in seen and len(to_crawl) + len(crawled) < max_pages:
+                        to_crawl.append(link)
         
         logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
         return crawled
@@ -159,14 +164,8 @@ def start_crawl():
         if not url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Invalid URL format'}), 400
         
-        # Run async crawl
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            pages = loop.run_until_complete(crawler.crawl_site(url, max_pages))
-        finally:
-            loop.close()
+        # Run crawl
+        pages = crawler.crawl_site(url, max_pages)
         
         # Convert to Firecrawl format for compatibility
         firecrawl_results = []
