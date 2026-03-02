@@ -3,128 +3,136 @@ import json
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from scrapling import Fetcher
 import logging
-
-app = Flask(__name__)
-CORS(app)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class ScraplingCrawler:
-    def __init__(self):
-        self.fetcher = Fetcher()
-        
-    def _classify_url(self, url):
-        """Classify URL based on path patterns"""
-        path = url.split('/')[-1].lower() if '/' in url else ''
-        
-        patterns = {
-            'contact': ['contact', 'about', 'team', 'staff'],
-            'services': ['service', 'services', 'products', 'solutions'],
-            'pricing': ['pricing', 'price', 'rates', 'fees', 'cost'],
-            'faq': ['faq', 'frequently-asked-questions', 'help', 'support'],
-            'reviews': ['review', 'reviews', 'testimonial', 'testimonials'],
-            'blog': ['blog', 'news', 'article', 'articles'],
-            'home': ['home', 'index', '']
-        }
-        
-        for category, keywords in patterns.items():
-            if any(keyword in path for keyword in keywords):
-                return category
-        
-        return 'other'
-    
-    def crawl_page(self, url):
-        """Crawl a single page using Scrapling"""
-        try:
-            logger.info(f"Crawling: {url}")
-            result = self.fetcher.get(url)
-            
-            if result.status_code == 200:
-                # Extract content using Scrapling's result object
-                title = ""
-                description = ""
-                content = ""
-                links = []
-                
-                # Try to extract title
-                if hasattr(result, 'soup') and result.soup:
-                    title_tag = result.soup.find('title')
-                    if title_tag:
-                        title = title_tag.get_text().strip()
-                    
-                    # Get meta description
-                    meta_desc = result.soup.find('meta', attrs={'name': 'description'})
-                    if meta_desc:
-                        description = meta_desc.get('content', '')
-                    
-                    # Get clean text content
-                    for script in result.soup(["script", "style"]):
-                        script.decompose()
-                    content = result.soup.get_text()
-                    content = ' '.join(content.split())  # Clean whitespace
-                    
-                    # Extract links
-                    for link in result.soup.find_all('a', href=True):
-                        href = link['href']
-                        if href.startswith('http') and url.split('/')[2] in href:
-                            links.append(href)
-                
-                # Classify URL
-                category = self._classify_url(url)
-                
-                return {
-                    'url': url,
-                    'title': title,
-                    'description': description,
-                    'content': content[:5000],  # Limit content length
-                    'category': category,
-                    'links': links[:50],  # Limit number of links
-                    'status_code': result.status_code,
-                    'timestamp': datetime.now().isoformat()
-                }
-            else:
-                logger.error(f"Failed to crawl {url}: HTTP {result.status_code}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error crawling {url}: {str(e)}")
-            return None
-    
-    def crawl_site(self, start_url, max_pages=20):
-        """Crawl entire site using Scrapling"""
-        logger.info(f"Starting Scrapling crawl of {start_url}, max pages: {max_pages}")
-        
-        crawled = []
-        to_crawl = [start_url]
-        seen = set([start_url])
-        
-        while to_crawl and len(crawled) < max_pages:
-            url = to_crawl.pop(0)
-            
-            if url in seen:
-                continue
-                
-            seen.add(url)
-            
-            page_data = self.crawl_page(url)
-            
-            if page_data:
-                crawled.append(page_data)
-                
-                # Add new links to crawl queue
-                for link in page_data['links']:
-                    if link not in seen and len(to_crawl) + len(crawled) < max_pages:
-                        to_crawl.append(link)
-        
-        logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
-        return crawled
+app = Flask(__name__)
+CORS(app)
 
-# Initialize crawler
-crawler = ScraplingCrawler()
+# Initialize Scrapling fetcher with error handling
+try:
+    from scrapling import Fetcher
+    fetcher = Fetcher()
+    logger.info("Scrapling Fetcher initialized successfully")
+except ImportError as e:
+    logger.error(f"Failed to import Scrapling: {e}")
+    fetcher = None
+except Exception as e:
+    logger.error(f"Error initializing Scrapling Fetcher: {e}")
+    fetcher = None
+
+def classify_url(url):
+    """Classify URL based on path patterns"""
+    path = url.split('/')[-1].lower() if '/' in url else ''
+    
+    patterns = {
+        'contact': ['contact', 'about', 'team', 'staff'],
+        'services': ['service', 'services', 'products', 'solutions'],
+        'pricing': ['pricing', 'price', 'rates', 'fees', 'cost'],
+        'faq': ['faq', 'frequently-asked-questions', 'help', 'support'],
+        'reviews': ['review', 'reviews', 'testimonial', 'testimonials'],
+        'blog': ['blog', 'news', 'article', 'articles'],
+        'home': ['home', 'index', '']
+    }
+    
+    for category, keywords in patterns.items():
+        if any(keyword in path for keyword in keywords):
+            return category
+    
+    return 'other'
+
+def crawl_page(url):
+    """Crawl a single page using Scrapling"""
+    if not fetcher:
+        logger.error("Scrapling fetcher not available")
+        return None
+        
+    try:
+        logger.info(f"Crawling: {url}")
+        result = fetcher.get(url)
+        
+        if result.status_code == 200:
+            # Extract content using Scrapling's result object
+            title = ""
+            description = ""
+            content = ""
+            links = []
+            
+            # Try to extract title
+            if hasattr(result, 'soup') and result.soup:
+                title_tag = result.soup.find('title')
+                if title_tag:
+                    title = title_tag.get_text().strip()
+                
+                # Get meta description
+                meta_desc = result.soup.find('meta', attrs={'name': 'description'})
+                if meta_desc:
+                    description = meta_desc.get('content', '')
+                
+                # Get clean text content
+                for script in result.soup(["script", "style"]):
+                    script.decompose()
+                content = result.soup.get_text()
+                content = ' '.join(content.split())  # Clean whitespace
+                
+                # Extract links
+                for link in result.soup.find_all('a', href=True):
+                    href = link['href']
+                    if href.startswith('http') and url.split('/')[2] in href:
+                        links.append(href)
+            
+            # Classify URL
+            category = classify_url(url)
+            
+            return {
+                'url': url,
+                'title': title,
+                'description': description,
+                'content': content[:5000],  # Limit content length
+                'category': category,
+                'links': links[:50],  # Limit number of links
+                'status_code': result.status_code,
+                'timestamp': datetime.now().isoformat()
+            }
+        else:
+            logger.error(f"Failed to crawl {url}: HTTP {result.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error crawling {url}: {str(e)}")
+        return None
+
+def crawl_site(start_url, max_pages=20):
+    """Crawl entire site using Scrapling"""
+    logger.info(f"Starting Scrapling crawl of {start_url}, max pages: {max_pages}")
+    
+    crawled = []
+    to_crawl = [start_url]
+    seen = set([start_url])
+    
+    while to_crawl and len(crawled) < max_pages:
+        url = to_crawl.pop(0)
+        
+        if url in seen:
+            continue
+            
+        seen.add(url)
+        
+        page_data = crawl_page(url)
+        
+        if page_data:
+            crawled.append(page_data)
+            
+            # Add new links to crawl queue
+            for link in page_data['links']:
+                if link not in seen and len(to_crawl) + len(crawled) < max_pages:
+                    to_crawl.append(link)
+    
+    logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
+    return crawled
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -132,7 +140,8 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'version': '1.0.0',
-        'framework': 'scrapling'
+        'framework': 'scrapling',
+        'fetcher_available': fetcher is not None
     })
 
 @app.route('/info', methods=['GET'])
@@ -146,12 +155,16 @@ def service_info():
             '/health': 'Health check',
             '/info': 'Service information',
             '/crawl': 'POST - Start crawling'
-        }
+        },
+        'fetcher_available': fetcher is not None
     })
 
 @app.route('/crawl', methods=['POST'])
 def start_crawl():
     try:
+        if not fetcher:
+            return jsonify({'error': 'Scrapling fetcher not available'}), 500
+            
         data = request.get_json()
         
         if not data or 'url' not in data:
@@ -165,7 +178,7 @@ def start_crawl():
             return jsonify({'error': 'Invalid URL format'}), 400
         
         # Run crawl
-        pages = crawler.crawl_site(url, max_pages)
+        pages = crawl_site(url, max_pages)
         
         # Convert to Firecrawl format for compatibility
         firecrawl_results = []
@@ -203,4 +216,8 @@ if __name__ == '__main__':
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
     
     logger.info(f"Starting Scrapling service on port {port}")
+    logger.info(f"Debug mode: {debug}")
+    logger.info(f"Scrapling fetcher available: {fetcher is not None}")
+    
+    # Ensure the app binds to 0.0.0.0 for Railway
     app.run(host='0.0.0.0', port=port, debug=debug)
