@@ -86,26 +86,35 @@ def crawl_page(url):
         except:
             pass
         
-        # Use Scrapling's native markdown conversion
-        markdown_content = ""
+        # Extract content using Scrapling's actual properties
+        text_content = ""
+        html_content = ""
+        
         try:
-            # Get markdown representation of the page
-            # Scrapling can convert HTML to markdown natively
-            markdown_content = page.markdown if hasattr(page, 'markdown') else ""
-            
-            # If no native markdown, fallback to text content
-            if not markdown_content:
-                text_content = page.text if hasattr(page, 'text') else ""
-                if text_content:
-                    markdown_content = f"# {title}\n\n{text_content}"
+            # Use get_all_text() method (documented in Scrapling)
+            text_content = page.get_all_text(strip=True, ignore_tags=('script', 'style', 'nav', 'header', 'footer'))
+            text_content = str(text_content) if text_content else ""
+            logger.info(f"Extracted text content length: {len(text_content)}")
         except Exception as e:
-            logger.error(f"Error getting markdown: {e}")
-            # Final fallback
-            try:
-                text_content = page.text if hasattr(page, 'text') else ""
-                markdown_content = f"# {title}\n\n{text_content}" if text_content else ""
-            except:
-                markdown_content = ""
+            logger.error(f"Error getting text: {e}")
+        
+        try:
+            # Get HTML content
+            html_content = page.html_content if hasattr(page, 'html_content') else ""
+            html_content = str(html_content) if html_content else ""
+        except Exception as e:
+            logger.error(f"Error getting HTML: {e}")
+        
+        # Create markdown from text content
+        markdown_content = ""
+        if text_content:
+            # Simple markdown formatting
+            markdown_content = f"# {title}\n\n"
+            if description:
+                markdown_content += f"{description}\n\n"
+            markdown_content += text_content
+        else:
+            logger.warning(f"No text content extracted for {url}")
         
         # Extract links
         links = []
