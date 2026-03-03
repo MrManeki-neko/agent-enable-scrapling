@@ -18,12 +18,12 @@ CORS(app)
 fetcher = None
 try:
     from scrapling import Fetcher
-    fetcher = Fetcher()
-    logger.info("Scrapling Fetcher initialized successfully")
+    # Don't instantiate, use class methods directly
+    logger.info("Scrapling Fetcher imported successfully")
 except ImportError as e:
     logger.error(f"Failed to import Scrapling: {e}")
 except Exception as e:
-    logger.error(f"Error initializing Scrapling Fetcher: {e}")
+    logger.error(f"Error importing Scrapling: {e}")
     logger.error(f"Error type: {type(e).__name__}")
     import traceback
     logger.error(f"Traceback: {traceback.format_exc()}")
@@ -50,19 +50,17 @@ def classify_url(url):
 
 def crawl_page(url):
     """Crawl a single page using Scrapling"""
-    if not fetcher:
-        logger.error("Scrapling fetcher not available")
-        return None
-        
     try:
         logger.info(f"Crawling: {url}")
-        result = fetcher.fetch(url)
+        
+        # Use Fetcher.fetch() as a class method, not instance method
+        result = Fetcher.fetch(url)
         
         logger.info(f"Result type: {type(result)}")
         logger.info(f"Result attributes: {dir(result)}")
         
-        if result and hasattr(result, 'html'):
-            logger.info(f"Got HTML content, length: {len(result.html) if result.html else 0}")
+        if result:
+            logger.info(f"Got result from Scrapling")
             
             # Extract content using Scrapling's result object
             title = ""
@@ -85,12 +83,12 @@ def crawl_page(url):
             logger.info(f"Found {len(links)} links")
             
             # If no links, try to extract from HTML using Scrapling's methods
-            if not links and hasattr(result, 'find_all'):
+            if not links and hasattr(result, 'css'):
                 try:
                     # Use Scrapling's built-in link extraction
-                    found_links = result.find_all('a', href=True)
-                    links = [link.get('href') for link in found_links if link.get('href')]
-                    logger.info(f"Extracted {len(links)} links using find_all")
+                    found_links = result.css('a::attr(href)')
+                    links = [link for link in found_links if link]
+                    logger.info(f"Extracted {len(links)} links using css")
                 except Exception as e:
                     logger.error(f"Error extracting links: {e}")
                     links = []
@@ -112,11 +110,13 @@ def crawl_page(url):
             logger.info(f"Successfully crawled page: {url}, title: {title}")
             return page_data
         else:
-            logger.error(f"Failed to crawl {url}: No HTML content returned")
+            logger.error(f"Failed to crawl {url}: No result returned")
             return None
             
     except Exception as e:
         logger.error(f"Error crawling {url}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def crawl_site(start_url, max_pages=20, delay_ms=1000):
@@ -182,7 +182,7 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'version': '1.0.0',
         'framework': 'scrapling',
-        'fetcher_available': fetcher is not None
+        'fetcher_available': True  # We're using class methods
     })
 
 @app.route('/info', methods=['GET'])
@@ -197,14 +197,13 @@ def service_info():
             '/info': 'Service information',
             '/crawl': 'POST - Start crawling'
         },
-        'fetcher_available': fetcher is not None
+        'fetcher_available': True  # We're using class methods
     })
 
 @app.route('/crawl', methods=['POST'])
 def start_crawl():
     try:
-        if not fetcher:
-            return jsonify({'error': 'Scrapling fetcher not available'}), 500
+        # We're using class methods, so no need to check fetcher instance
             
         data = request.get_json()
         
