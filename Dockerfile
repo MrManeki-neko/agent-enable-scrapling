@@ -21,6 +21,9 @@ RUN scrapling install && \
     playwright install chromium && \
     playwright install-deps chromium
 
+# Create non-root user first
+RUN useradd --create-home --shell /bin/bash app
+
 # Copy Playwright browsers to be accessible by non-root user
 RUN mkdir -p /home/app/.cache && \
     cp -r /root/.cache/ms-playwright /home/app/.cache/ && \
@@ -39,8 +42,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/health || exit 1
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
+# Set ownership and switch to non-root user
+RUN chown -R app:app /app
 USER app
 
 # Start the application
