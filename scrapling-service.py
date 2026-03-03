@@ -67,21 +67,99 @@ def crawl_page(url):
         if result:
             logger.info(f"Got result from Scrapling")
             
-            # Extract content using Scrapling's result object
+            # Extract content
             title = ""
             description = ""
             content = ""
             links = []
             
-            # Use Scrapling's built-in content extraction
-            title = getattr(result, 'title', '')
-            logger.info(f"Extracted title: {title}")
+            # Extract title using Scrapling's methods
+            try:
+                title_selectors = result.css('title::text')
+                if title_selectors:
+                    title = title_selectors[0].get() if hasattr(title_selectors[0], 'get') else str(title_selectors[0])
+                title = title.strip()
+                logger.info(f"Extracted title: {title}")
+            except Exception as e:
+                logger.error(f"Error extracting title: {e}")
             
-            # Get HTML content
-            html_content = getattr(result, 'html', '')
-            if html_content:
-                content = getattr(result, 'text', '') or html_content
+            # Extract description using meta tags
+            try:
+                desc_selectors = result.css('meta[name="description"]::attr(content)')
+                if not desc_selectors:
+                    desc_selectors = result.css('meta[property="og:description"]::attr(content)')
+                
+                if desc_selectors:
+                    description = desc_selectors[0].get() if hasattr(desc_selectors[0], 'get') else str(desc_selectors[0])
+                    description = description.strip()
+                logger.info(f"Extracted description: {description[:100]}...")
+            except Exception as e:
+                logger.error(f"Error extracting description: {e}")
+            
+            # Get content using Scrapling's methods
+            try:
+                # Try multiple approaches to extract content
+                
+                # Method 1: Get text from common content elements
+                content_selectors = [
+                    'main::text', 'article::text', '.content::text', 
+                    '.post-content::text', '.entry-content::text',
+                    'p::text', 'div::text', 'span::text'
+                ]
+                
+                content_parts = []
+                for selector in content_selectors:
+                    try:
+                        elements = result.css(selector)
+                        for element in elements:
+                            text_val = element.get() if hasattr(element, 'get') else str(element)
+                            if text_val and text_val.strip() and len(text_val.strip()) > 10:
+                                content_parts.append(text_val.strip())
+                    except:
+                        continue
+                
+                # Method 2: If no content from selectors, try to get all text from body
+                if not content_parts:
+                    try:
+                        body_elements = result.css('body *')
+                        for element in body_elements:
+                            # Get text from elements that are not scripts or styles
+                            tag_name = getattr(element, 'tag', '')
+                            if tag_name not in ['script', 'style', 'noscript']:
+                                text_val = element.get() if hasattr(element, 'get') else str(element)
+                                if text_val and text_val.strip() and len(text_val.strip()) > 10:
+                                    content_parts.append(text_val.strip())
+                    except:
+                        pass
+                
+                # Method 3: Fallback to body text
+                if not content_parts:
+                    try:
+                        body_text = result.css('body')
+                        if body_text:
+                            content = body_text[0].get() if hasattr(body_text[0], 'get') else str(body_text[0])
+                            content = content.strip()
+                    except:
+                        content = ""
+                else:
+                    content = ' '.join(content_parts)
+                
+                # Clean up content
+                if content:
+                    # Remove excessive whitespace and newlines
+                    import re
+                    content = re.sub(r'\s+', ' ', content)
+                    content = re.sub(r'\n+', ' ', content)
+                    content = content.strip()
+                    
+                    # Remove very short content (likely navigation/menu items)
+                    if len(content) < 50:
+                        content = ""
+                
                 logger.info(f"Got content, length: {len(content)}")
+            except Exception as e:
+                logger.error(f"Error extracting content: {e}")
+                content = ""
             
             # Get links from Scrapling
             links = getattr(result, 'links', [])
