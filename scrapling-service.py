@@ -85,6 +85,8 @@ def crawl_page(url):
             
             # Get links from Scrapling
             links = getattr(result, 'links', [])
+            # Convert any non-string links to strings
+            links = [str(link) if not isinstance(link, str) else link for link in links]
             logger.info(f"Found {len(links)} links")
             
             # If no links, try to extract from HTML using Scrapling's methods
@@ -92,7 +94,9 @@ def crawl_page(url):
                 try:
                     # Use Scrapling's built-in link extraction
                     found_links = result.css('a::attr(href)')
-                    links = [link for link in found_links if link]
+                    # Extract actual string values from Selector objects
+                    links = [link.get() if hasattr(link, 'get') else str(link) for link in found_links if link]
+                    links = [link for link in links if link]  # Filter out empty strings
                     logger.info(f"Extracted {len(links)} links using css")
                 except Exception as e:
                     logger.error(f"Error extracting links: {e}")
