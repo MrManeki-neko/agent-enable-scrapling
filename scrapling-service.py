@@ -1,9 +1,11 @@
 import os
 import json
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
+from urllib.parse import urljoin, urlparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,37 +56,34 @@ def crawl_page(url):
         
     try:
         logger.info(f"Crawling: {url}")
-        result = fetcher.get(url)
+        result = fetcher.fetch(url)
         
-        if result.status_code == 200:
+        if result and hasattr(result, 'html'):
             # Extract content using Scrapling's result object
             title = ""
             description = ""
             content = ""
             links = []
             
-            # Try to extract title
-            if hasattr(result, 'soup') and result.soup:
-                title_tag = result.soup.find('title')
-                if title_tag:
-                    title = title_tag.get_text().strip()
-                
-                # Get meta description
-                meta_desc = result.soup.find('meta', attrs={'name': 'description'})
-                if meta_desc:
-                    description = meta_desc.get('content', '')
-                
-                # Get clean text content
-                for script in result.soup(["script", "style"]):
-                    script.decompose()
-                content = result.soup.get_text()
-                content = ' '.join(content.split())  # Clean whitespace
-                
-                # Extract links
-                for link in result.soup.find_all('a', href=True):
-                    href = link['href']
-                    if href.startswith('http') and url.split('/')[2] in href:
-                        links.append(href)
+            # Use Scrapling's built-in content extraction
+            title = getattr(result, 'title', '')
+            
+            # Get HTML content
+            html_content = getattr(result, 'html', '')
+            if html_content:
+                content = getattr(result, 'text', '') or html_content
+            
+            # Get links from Scrapling
+            links = getattr(result, 'links', [])
+            
+            # If no links, try to extract from HTML using Scrapling's methods
+            if not links and hasattr(result, 'find_all'):
+                try:
+                    # Use Scrapling's built-in link extraction
+                    found_links = result.find_all('a', href=True)
+                    links = [link.get('href') for link in found_links if link.get('href')]
+                except:
+                    links = []
             
             # Classify URL
             category = classify_url(url)
@@ -96,24 +95,25 @@ def crawl_page(url):
                 'content': content[:5000],  # Limit content length
                 'category': category,
                 'links': links[:50],  # Limit number of links
-                'status_code': result.status_code,
+                'status_code': 200,  # Success since we got HTML
                 'timestamp': datetime.now().isoformat()
             }
         else:
-            logger.error(f"Failed to crawl {url}: HTTP {result.status_code}")
+            logger.error(f"Failed to crawl {url}: No HTML content returned")
             return None
             
     except Exception as e:
         logger.error(f"Error crawling {url}: {str(e)}")
         return None
 
-def crawl_site(start_url, max_pages=20):
+def crawl_site(start_url, max_pages=20, delay_ms=1000):
     """Crawl entire site using Scrapling"""
     logger.info(f"Starting Scrapling crawl of {start_url}, max pages: {max_pages}")
     
     crawled = []
     to_crawl = [start_url]
     seen = set([start_url])
+    base_domain = urlparse(start_url).netloc
     
     while to_crawl and len(crawled) < max_pages:
         url = to_crawl.pop(0)
@@ -130,8 +130,19 @@ def crawl_site(start_url, max_pages=20):
             
             # Add new links to crawl queue
             for link in page_data['links']:
-                if link not in seen and len(to_crawl) + len(crawled) < max_pages:
-                    to_crawl.append(link)
+                # Normalize URL and check if it belongs to same domain
+                if link.startswith('http') and base_domain in link:
+                    if link not in seen and len(to_crawl) + len(crawled) < max_pages:
+                        to_crawl.append(link)
+                elif link.startswith('/'):
+                    # Convert relative URLs to absolute
+                    absolute_url = urljoin(start_url, link)
+                    if absolute_url not in seen and len(to_crawl) + len(crawled) < max_pages:
+                        to_crawl.append(absolute_url)
+            
+            # Polite delay between requests
+            if delay_ms > 0 and len(crawled) < max_pages:
+                time.sleep(delay_ms / 1000)
     
     logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
     return crawled
@@ -173,14 +184,15 @@ def start_crawl():
             return jsonify({'error': 'URL is required'}), 400
         
         url = data['url']
-        max_pages = data.get('max_pages', 20)
+        max_pages = data.get('maxPages', 20)  # Note: maxPages not max_page
+        delay_ms = data.get('delayMs', 1000)
         
         # Validate URL
         if not url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Invalid URL format'}), 400
         
         # Run crawl
-        pages = crawl_site(url, max_pages)
+        pages = crawl_site(url, max_pages, delay_ms)
         
         # Convert to Firecrawl format for compatibility
         firecrawl_results = []
