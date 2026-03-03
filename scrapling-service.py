@@ -128,18 +128,28 @@ def crawl_site(start_url, max_pages=20, delay_ms=1000):
     seen = set([start_url])
     base_domain = urlparse(start_url).netloc
     
+    logger.info(f"Initial crawl queue: {to_crawl}")
+    logger.info(f"Seen URLs: {seen}")
+    logger.info(f"Base domain: {base_domain}")
+    
     while to_crawl and len(crawled) < max_pages:
         url = to_crawl.pop(0)
+        logger.info(f"Processing URL from queue: {url}")
         
         if url in seen:
+            logger.info(f"URL already seen, skipping: {url}")
             continue
             
         seen.add(url)
+        logger.info(f"Added URL to seen: {url}")
         
+        logger.info(f"About to call crawl_page for: {url}")
         page_data = crawl_page(url)
+        logger.info(f"crawl_page returned: {page_data is not None}")
         
         if page_data:
             crawled.append(page_data)
+            logger.info(f"Successfully crawled page: {url}, total crawled: {len(crawled)}")
             
             # Add new links to crawl queue
             for link in page_data['links']:
@@ -147,15 +157,20 @@ def crawl_site(start_url, max_pages=20, delay_ms=1000):
                 if link.startswith('http') and base_domain in link:
                     if link not in seen and len(to_crawl) + len(crawled) < max_pages:
                         to_crawl.append(link)
+                        logger.info(f"Added absolute link to queue: {link}")
                 elif link.startswith('/'):
                     # Convert relative URLs to absolute
                     absolute_url = urljoin(start_url, link)
                     if absolute_url not in seen and len(to_crawl) + len(crawled) < max_pages:
                         to_crawl.append(absolute_url)
+                        logger.info(f"Added relative link to queue: {absolute_url}")
             
             # Polite delay between requests
             if delay_ms > 0 and len(crawled) < max_pages:
+                logger.info(f"Waiting {delay_ms}ms before next request")
                 time.sleep(delay_ms / 1000)
+        else:
+            logger.error(f"Failed to crawl page: {url}")
     
     logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
     return crawled
