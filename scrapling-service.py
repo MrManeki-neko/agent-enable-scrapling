@@ -17,13 +17,14 @@ CORS(app)
 # Initialize Scrapling fetcher with error handling
 fetcher = None
 try:
-    from scrapling import Fetcher
-    # Don't instantiate, use class methods directly
-    logger.info("Scrapling Fetcher imported successfully")
+    from scrapling.fetchers import Fetcher, StealthyFetcher, DynamicFetcher
+    # Use StealthyFetcher for better anti-bot protection
+    fetcher = StealthyFetcher()
+    logger.info("Scrapling StealthyFetcher initialized successfully")
 except ImportError as e:
     logger.error(f"Failed to import Scrapling: {e}")
 except Exception as e:
-    logger.error(f"Error importing Scrapling: {e}")
+    logger.error(f"Error initializing Scrapling Fetcher: {e}")
     logger.error(f"Error type: {type(e).__name__}")
     import traceback
     logger.error(f"Traceback: {traceback.format_exc()}")
@@ -50,11 +51,15 @@ def classify_url(url):
 
 def crawl_page(url):
     """Crawl a single page using Scrapling"""
+    if not fetcher:
+        logger.error("Scrapling fetcher not available")
+        return None
+        
     try:
         logger.info(f"Crawling: {url}")
         
-        # Use Fetcher.fetch() as a class method, not instance method
-        result = Fetcher.fetch(url)
+        # Use the StealthyFetcher instance method
+        result = fetcher.fetch(url)
         
         logger.info(f"Result type: {type(result)}")
         logger.info(f"Result attributes: {dir(result)}")
@@ -182,7 +187,7 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'version': '1.0.0',
         'framework': 'scrapling',
-        'fetcher_available': True  # We're using class methods
+        'fetcher_available': fetcher is not None
     })
 
 @app.route('/info', methods=['GET'])
@@ -197,13 +202,14 @@ def service_info():
             '/info': 'Service information',
             '/crawl': 'POST - Start crawling'
         },
-        'fetcher_available': True  # We're using class methods
+        'fetcher_available': fetcher is not None
     })
 
 @app.route('/crawl', methods=['POST'])
 def start_crawl():
     try:
-        # We're using class methods, so no need to check fetcher instance
+        if not fetcher:
+            return jsonify({'error': 'Scrapling fetcher not available'}), 500
             
         data = request.get_json()
         
