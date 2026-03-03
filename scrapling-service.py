@@ -13,16 +13,18 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialize Scrapling fetcher with error handling
+fetcher = None
 try:
     from scrapling import Fetcher
     fetcher = Fetcher()
     logger.info("Scrapling Fetcher initialized successfully")
 except ImportError as e:
     logger.error(f"Failed to import Scrapling: {e}")
-    fetcher = None
 except Exception as e:
     logger.error(f"Error initializing Scrapling Fetcher: {e}")
-    fetcher = None
+    logger.error(f"Error type: {type(e).__name__}")
+    import traceback
+    logger.error(f"Traceback: {traceback.format_exc()}")
 
 def classify_url(url):
     """Classify URL based on path patterns"""
