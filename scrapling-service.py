@@ -58,7 +58,12 @@ def crawl_page(url):
         logger.info(f"Crawling: {url}")
         result = fetcher.fetch(url)
         
+        logger.info(f"Result type: {type(result)}")
+        logger.info(f"Result attributes: {dir(result)}")
+        
         if result and hasattr(result, 'html'):
+            logger.info(f"Got HTML content, length: {len(result.html) if result.html else 0}")
+            
             # Extract content using Scrapling's result object
             title = ""
             description = ""
@@ -67,14 +72,17 @@ def crawl_page(url):
             
             # Use Scrapling's built-in content extraction
             title = getattr(result, 'title', '')
+            logger.info(f"Extracted title: {title}")
             
             # Get HTML content
             html_content = getattr(result, 'html', '')
             if html_content:
                 content = getattr(result, 'text', '') or html_content
+                logger.info(f"Got content, length: {len(content)}")
             
             # Get links from Scrapling
             links = getattr(result, 'links', [])
+            logger.info(f"Found {len(links)} links")
             
             # If no links, try to extract from HTML using Scrapling's methods
             if not links and hasattr(result, 'find_all'):
@@ -82,13 +90,15 @@ def crawl_page(url):
                     # Use Scrapling's built-in link extraction
                     found_links = result.find_all('a', href=True)
                     links = [link.get('href') for link in found_links if link.get('href')]
-                except:
+                    logger.info(f"Extracted {len(links)} links using find_all")
+                except Exception as e:
+                    logger.error(f"Error extracting links: {e}")
                     links = []
             
             # Classify URL
             category = classify_url(url)
             
-            return {
+            page_data = {
                 'url': url,
                 'title': title,
                 'description': description,
@@ -98,6 +108,9 @@ def crawl_page(url):
                 'status_code': 200,  # Success since we got HTML
                 'timestamp': datetime.now().isoformat()
             }
+            
+            logger.info(f"Successfully crawled page: {url}, title: {title}")
+            return page_data
         else:
             logger.error(f"Failed to crawl {url}: No HTML content returned")
             return None
