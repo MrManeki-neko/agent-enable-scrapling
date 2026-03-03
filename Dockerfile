@@ -1,4 +1,3 @@
-# Version 2.1 - Force cache rebuild for Playwright browsers
 FROM python:3.10-slim
 
 # Install system dependencies for Playwright
@@ -17,9 +16,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Scrapling browsers and Playwright browsers (MUST run as root)
-RUN scrapling install
-RUN playwright install chromium
-RUN playwright install-deps
+# Cache bust: 2026-03-03-17:10
+RUN scrapling install && \
+    playwright install chromium && \
+    playwright install-deps chromium
 
 # Copy application code
 COPY . .
@@ -37,4 +37,3 @@ USER app
 
 # Start the application
 CMD ["python", "scrapling-service.py"]
-
