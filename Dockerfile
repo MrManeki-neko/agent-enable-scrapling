@@ -1,3 +1,4 @@
+# Version 2.1 - Force cache rebuild for Playwright browsers
 FROM python:3.10-slim
 
 # Install system dependencies for Playwright
@@ -36,3 +37,4 @@ USER app
 
 # Start the application
 CMD ["python", "scrapling-service.py"]
+
