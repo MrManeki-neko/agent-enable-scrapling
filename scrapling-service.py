@@ -125,7 +125,7 @@ def crawl_site(start_url, max_pages=20, delay_ms=1000):
     
     crawled = []
     to_crawl = [start_url]
-    seen = set([start_url])
+    seen = set()  # Don't add start_url to seen initially
     base_domain = urlparse(start_url).netloc
     
     logger.info(f"Initial crawl queue: {to_crawl}")
@@ -140,7 +140,7 @@ def crawl_site(start_url, max_pages=20, delay_ms=1000):
             logger.info(f"URL already seen, skipping: {url}")
             continue
             
-        seen.add(url)
+        seen.add(url)  # Add to seen AFTER processing, not before
         logger.info(f"Added URL to seen: {url}")
         
         logger.info(f"About to call crawl_page for: {url}")
