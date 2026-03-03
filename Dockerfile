@@ -15,7 +15,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Scrapling browsers and Playwright browsers
+# Install Scrapling browsers and Playwright browsers (MUST run as root)
 RUN scrapling install
 RUN playwright install chromium
 RUN playwright install-deps
