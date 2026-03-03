@@ -21,6 +21,14 @@ RUN scrapling install && \
     playwright install chromium && \
     playwright install-deps chromium
 
+# Copy Playwright browsers to be accessible by non-root user
+RUN mkdir -p /home/app/.cache && \
+    cp -r /root/.cache/ms-playwright /home/app/.cache/ && \
+    chown -R app:app /home/app/.cache
+
+# Set HOME environment variable for the app user
+ENV HOME=/home/app
+
 # Copy application code
 COPY . .
 
