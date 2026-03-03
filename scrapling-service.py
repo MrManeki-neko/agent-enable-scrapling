@@ -14,20 +14,17 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Scrapling fetcher with error handling
-fetcher = None
+# Initialize Scrapling - Use Fetcher class (faster than StealthyFetcher)
 try:
-    from scrapling.fetchers import Fetcher, StealthyFetcher, DynamicFetcher
-    # Use StealthyFetcher for better anti-bot protection
-    fetcher = StealthyFetcher()
-    logger.info("Scrapling StealthyFetcher initialized successfully")
+    from scrapling.fetchers import Fetcher
+    logger.info("Scrapling Fetcher imported successfully")
+    fetcher_available = True
 except ImportError as e:
     logger.error(f"Failed to import Scrapling: {e}")
+    fetcher_available = False
 except Exception as e:
-    logger.error(f"Error initializing Scrapling Fetcher: {e}")
-    logger.error(f"Error type: {type(e).__name__}")
-    import traceback
-    logger.error(f"Traceback: {traceback.format_exc()}")
+    logger.error(f"Error importing Scrapling: {e}")
+    fetcher_available = False
 
 def classify_url(url):
     """Classify URL based on path patterns"""
@@ -50,160 +47,93 @@ def classify_url(url):
     return 'other'
 
 def crawl_page(url):
-    """Crawl a single page using Scrapling"""
-    if not fetcher:
-        logger.error("Scrapling fetcher not available")
+    """Crawl a single page using Scrapling with native markdown conversion"""
+    if not fetcher_available:
+        logger.error("Scrapling not available")
         return None
         
     try:
         logger.info(f"Crawling: {url}")
         
-        # Use the StealthyFetcher instance method
-        result = fetcher.fetch(url)
+        # Use Fetcher.get() static method (recommended approach)
+        page = Fetcher.get(url, follow_redirects=True)
         
-        logger.info(f"Result type: {type(result)}")
-        logger.info(f"Result attributes: {dir(result)}")
-        
-        if result:
-            logger.info(f"Got result from Scrapling")
-            
-            # Extract content
-            title = ""
-            description = ""
-            content = ""
-            links = []
-            
-            # Extract title using Scrapling's methods
-            try:
-                title_selectors = result.css('title::text')
-                if title_selectors:
-                    title = title_selectors[0].get() if hasattr(title_selectors[0], 'get') else str(title_selectors[0])
-                title = title.strip()
-                logger.info(f"Extracted title: {title}")
-            except Exception as e:
-                logger.error(f"Error extracting title: {e}")
-            
-            # Extract description using meta tags
-            try:
-                desc_selectors = result.css('meta[name="description"]::attr(content)')
-                if not desc_selectors:
-                    desc_selectors = result.css('meta[property="og:description"]::attr(content)')
-                
-                if desc_selectors:
-                    description = desc_selectors[0].get() if hasattr(desc_selectors[0], 'get') else str(desc_selectors[0])
-                    description = description.strip()
-                logger.info(f"Extracted description: {description[:100]}...")
-            except Exception as e:
-                logger.error(f"Error extracting description: {e}")
-            
-            # Get content using Scrapling's methods
-            try:
-                # Try multiple approaches to extract content
-                
-                # Method 1: Get text from common content elements
-                content_selectors = [
-                    'main::text', 'article::text', '.content::text', 
-                    '.post-content::text', '.entry-content::text',
-                    'p::text', 'div::text', 'span::text'
-                ]
-                
-                content_parts = []
-                for selector in content_selectors:
-                    try:
-                        elements = result.css(selector)
-                        for element in elements:
-                            text_val = element.get() if hasattr(element, 'get') else str(element)
-                            if text_val and text_val.strip() and len(text_val.strip()) > 10:
-                                content_parts.append(text_val.strip())
-                    except:
-                        continue
-                
-                # Method 2: If no content from selectors, try to get all text from body
-                if not content_parts:
-                    try:
-                        body_elements = result.css('body *')
-                        for element in body_elements:
-                            # Get text from elements that are not scripts or styles
-                            tag_name = getattr(element, 'tag', '')
-                            if tag_name not in ['script', 'style', 'noscript']:
-                                text_val = element.get() if hasattr(element, 'get') else str(element)
-                                if text_val and text_val.strip() and len(text_val.strip()) > 10:
-                                    content_parts.append(text_val.strip())
-                    except:
-                        pass
-                
-                # Method 3: Fallback to body text
-                if not content_parts:
-                    try:
-                        body_text = result.css('body')
-                        if body_text:
-                            content = body_text[0].get() if hasattr(body_text[0], 'get') else str(body_text[0])
-                            content = content.strip()
-                    except:
-                        content = ""
-                else:
-                    content = ' '.join(content_parts)
-                
-                # Clean up content
-                if content:
-                    # Remove excessive whitespace and newlines
-                    import re
-                    content = re.sub(r'\s+', ' ', content)
-                    content = re.sub(r'\n+', ' ', content)
-                    content = content.strip()
-                    
-                    # Remove very short content (likely navigation/menu items)
-                    if len(content) < 50:
-                        content = ""
-                
-                logger.info(f"Got content, length: {len(content)}")
-            except Exception as e:
-                logger.error(f"Error extracting content: {e}")
-                content = ""
-            
-            # Get links from Scrapling
-            links = getattr(result, 'links', [])
-            # Convert any non-string links to strings
-            links = [str(link) if not isinstance(link, str) else link for link in links]
-            logger.info(f"Found {len(links)} links")
-            
-            # If no links, try to extract from HTML using Scrapling's methods
-            if not links and hasattr(result, 'css'):
-                try:
-                    # Use Scrapling's built-in link extraction
-                    found_links = result.css('a::attr(href)')
-                    # Extract actual string values from Selector objects
-                    links = [link.get() if hasattr(link, 'get') else str(link) for link in found_links if link]
-                    links = [link for link in links if link]  # Filter out empty strings
-                    logger.info(f"Extracted {len(links)} links using css")
-                except Exception as e:
-                    logger.error(f"Error extracting links: {e}")
-                    links = []
-            
-            # Classify URL
-            category = classify_url(url)
-            
-            page_data = {
-                'url': url,
-                'title': title,
-                'description': description,
-                'content': content[:5000],  # Limit content length
-                'category': category,
-                'links': links[:50],  # Limit number of links
-                'status_code': 200,  # Success since we got HTML
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            logger.info(f"Successfully crawled page: {url}, title: {title}")
-            return page_data
-        else:
-            logger.error(f"Failed to crawl {url}: No result returned")
+        if not page:
+            logger.error(f"Failed to fetch {url}")
             return None
+        
+        logger.info(f"Successfully fetched page")
+        
+        # Extract metadata
+        title = ""
+        description = ""
+        
+        try:
+            title_elem = page.css('title::text')
+            if title_elem:
+                title = title_elem[0].get() if hasattr(title_elem[0], 'get') else str(title_elem[0])
+                title = title.strip()
+        except:
+            pass
+        
+        try:
+            desc_elem = page.css('meta[name="description"]::attr(content)')
+            if not desc_elem:
+                desc_elem = page.css('meta[property="og:description"]::attr(content)')
+            if desc_elem:
+                description = desc_elem[0].get() if hasattr(desc_elem[0], 'get') else str(desc_elem[0])
+                description = description.strip()
+        except:
+            pass
+        
+        # Use Scrapling's native markdown conversion
+        markdown_content = ""
+        try:
+            # Get markdown representation of the page
+            # Scrapling can convert HTML to markdown natively
+            markdown_content = page.markdown if hasattr(page, 'markdown') else ""
+            
+            # If no native markdown, fallback to text content
+            if not markdown_content:
+                text_content = page.text if hasattr(page, 'text') else ""
+                if text_content:
+                    markdown_content = f"# {title}\n\n{text_content}"
+        except Exception as e:
+            logger.error(f"Error getting markdown: {e}")
+            # Final fallback
+            try:
+                text_content = page.text if hasattr(page, 'text') else ""
+                markdown_content = f"# {title}\n\n{text_content}" if text_content else ""
+            except:
+                markdown_content = ""
+        
+        # Extract links
+        links = []
+        try:
+            link_elements = page.css('a::attr(href)')
+            links = [link.get() if hasattr(link, 'get') else str(link) for link in link_elements if link]
+            links = [link for link in links if link and isinstance(link, str)][:50]
+        except Exception as e:
+            logger.error(f"Error extracting links: {e}")
+        
+        # Classify URL
+        category = classify_url(url)
+        
+        logger.info(f"Extracted - Title: {title[:50]}, Markdown length: {len(markdown_content)}, Links: {len(links)}")
+        
+        return {
+            'url': url,
+            'title': title,
+            'description': description,
+            'markdown': markdown_content[:10000],  # Limit to 10KB
+            'category': category,
+            'links': links,
+            'status_code': 200,
+            'timestamp': datetime.now().isoformat()
+        }
             
     except Exception as e:
         logger.error(f"Error crawling {url}: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def crawl_site(start_url, max_pages=20, delay_ms=1000):
@@ -269,7 +199,7 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'version': '1.0.0',
         'framework': 'scrapling',
-        'fetcher_available': fetcher is not None
+        'fetcher_available': fetcher_available
     })
 
 @app.route('/info', methods=['GET'])
@@ -284,14 +214,14 @@ def service_info():
             '/info': 'Service information',
             '/crawl': 'POST - Start crawling'
         },
-        'fetcher_available': fetcher is not None
+        'fetcher_available': fetcher_available
     })
 
 @app.route('/crawl', methods=['POST'])
 def start_crawl():
     try:
-        if not fetcher:
-            return jsonify({'error': 'Scrapling fetcher not available'}), 500
+        if not fetcher_available:
+            return jsonify({'error': 'Scrapling not available'}), 500
             
         data = request.get_json()
         
@@ -299,14 +229,16 @@ def start_crawl():
             return jsonify({'error': 'URL is required'}), 400
         
         url = data['url']
-        max_pages = data.get('maxPages', 20)  # Note: maxPages not max_page
-        delay_ms = data.get('delayMs', 1000)
+        max_pages = min(data.get('maxPages', 10), 10)  # Max 10 pages
+        delay_ms = data.get('delayMs', 300)  # Reduced to 300ms
         
         # Validate URL
         if not url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Invalid URL format'}), 400
         
-        # Run crawl
+        logger.info(f"Starting crawl: {url}, max_pages: {max_pages}, delay_ms: {delay_ms}")
+        
+        # Run crawl (removed timeout handler as it doesn't work properly with threading)
         pages = crawl_site(url, max_pages, delay_ms)
         
         # Convert to Firecrawl format for compatibility
@@ -314,7 +246,7 @@ def start_crawl():
         for page in pages:
             result = {
                 'url': page['url'],
-                'markdown': f"# {page['title']}\n\n{page['content']}",
+                'markdown': page['markdown'],  # Use native markdown from Scrapling
                 'html': '',  # Not including HTML to save space
                 'metadata': {
                     'title': page['title'],
@@ -327,6 +259,8 @@ def start_crawl():
                 }
             }
             firecrawl_results.append(result)
+        
+        logger.info(f"Crawl completed: {len(firecrawl_results)} pages")
         
         return jsonify({
             'success': True,
@@ -346,7 +280,7 @@ if __name__ == '__main__':
     
     logger.info(f"Starting Scrapling service on port {port}")
     logger.info(f"Debug mode: {debug}")
-    logger.info(f"Scrapling fetcher available: {fetcher is not None}")
+    logger.info(f"Scrapling fetcher available: {fetcher_available}")
     
     # Ensure the app binds to 0.0.0.0 for Railway
     app.run(host='0.0.0.0', port=port, debug=debug)
