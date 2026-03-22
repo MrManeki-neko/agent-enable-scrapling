@@ -1,6 +1,6 @@
+import asyncio
 import os
-import json
-import time
+from collections import deque
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -14,22 +14,20 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Scrapling - Use Fetcher class (faster than StealthyFetcher)
+# Verify FetcherSession is importable at startup
 try:
-    from scrapling.fetchers import Fetcher
-    logger.info("Scrapling Fetcher imported successfully")
+    from scrapling.fetchers import FetcherSession
+    logger.info("Scrapling FetcherSession imported successfully")
     fetcher_available = True
-except ImportError as e:
-    logger.error(f"Failed to import Scrapling: {e}")
-    fetcher_available = False
 except Exception as e:
-    logger.error(f"Error importing Scrapling: {e}")
+    logger.error(f"Failed to import Scrapling FetcherSession: {e}")
     fetcher_available = False
 
+
 def classify_url(url):
-    """Classify URL based on path patterns"""
+    """Classify URL based on path patterns."""
     path = url.split('/')[-1].lower() if '/' in url else ''
-    
+
     patterns = {
         'contact': ['contact', 'about', 'team', 'staff'],
         'services': ['service', 'services', 'products', 'solutions'],
@@ -39,185 +37,184 @@ def classify_url(url):
         'blog': ['blog', 'news', 'article', 'articles'],
         'home': ['home', 'index', '']
     }
-    
+
     for category, keywords in patterns.items():
         if any(keyword in path for keyword in keywords):
             return category
-    
+
     return 'other'
 
-def crawl_page(url):
-    """Crawl a single page using Scrapling with native markdown conversion"""
-    if not fetcher_available:
-        logger.error("Scrapling not available")
-        return None
-        
+
+def _parse_page(page, url):
+    """Extract title, description, markdown, and links from a Scrapling page object."""
+    title = ""
+    description = ""
+
     try:
-        logger.info(f"Crawling: {url}")
-        
-        # Use Fetcher.get() static method (recommended approach)
-        page = Fetcher.get(url, follow_redirects=True)
-        
+        title_elem = page.css('title::text')
+        if title_elem:
+            title = title_elem[0].get() if hasattr(title_elem[0], 'get') else str(title_elem[0])
+            title = title.strip()
+    except Exception:
+        pass
+
+    try:
+        desc_elem = page.css('meta[name="description"]::attr(content)')
+        if not desc_elem:
+            desc_elem = page.css('meta[property="og:description"]::attr(content)')
+        if desc_elem:
+            description = desc_elem[0].get() if hasattr(desc_elem[0], 'get') else str(desc_elem[0])
+            description = description.strip()
+    except Exception:
+        pass
+
+    text_content = ""
+    try:
+        text_content = page.get_all_text(strip=True, ignore_tags=('script', 'style', 'nav', 'header', 'footer'))
+        text_content = str(text_content) if text_content else ""
+    except Exception as e:
+        logger.error(f"Error extracting text from {url}: {e}")
+
+    markdown_content = ""
+    if text_content:
+        markdown_content = f"# {title}\n\n"
+        if description:
+            markdown_content += f"{description}\n\n"
+        markdown_content += text_content
+    else:
+        logger.warning(f"No text content extracted for {url}")
+
+    links = []
+    try:
+        link_elements = page.css('a::attr(href)')
+        links = [lnk.get() if hasattr(lnk, 'get') else str(lnk) for lnk in link_elements if lnk]
+        links = [lnk for lnk in links if lnk and isinstance(lnk, str)][:50]
+    except Exception as e:
+        logger.error(f"Error extracting links from {url}: {e}")
+
+    return title, description, markdown_content, links
+
+
+async def crawl_page(session, url):
+    """
+    Fetch and parse a single page using the shared FetcherSession.
+    The session keeps the underlying HTTP connection alive across all
+    concurrent calls, giving the ~10x speed improvement noted in the
+    Scrapling docs versus creating a new session per request.
+    """
+    try:
+        logger.info(f"Fetching: {url}")
+
+        # asyncio.wait_for enforces a hard per-page timeout
+        page = await asyncio.wait_for(
+            session.get(url, follow_redirects=True),
+            timeout=15
+        )
+
         if not page:
-            logger.error(f"Failed to fetch {url}")
+            logger.warning(f"No response for {url}")
             return None
-        
-        logger.info(f"Successfully fetched page")
-        
-        # Extract metadata
-        title = ""
-        description = ""
-        
-        try:
-            title_elem = page.css('title::text')
-            if title_elem:
-                title = title_elem[0].get() if hasattr(title_elem[0], 'get') else str(title_elem[0])
-                title = title.strip()
-        except:
-            pass
-        
-        try:
-            desc_elem = page.css('meta[name="description"]::attr(content)')
-            if not desc_elem:
-                desc_elem = page.css('meta[property="og:description"]::attr(content)')
-            if desc_elem:
-                description = desc_elem[0].get() if hasattr(desc_elem[0], 'get') else str(desc_elem[0])
-                description = description.strip()
-        except:
-            pass
-        
-        # Extract content using Scrapling's actual properties
-        text_content = ""
-        html_content = ""
-        
-        try:
-            # Use get_all_text() method (documented in Scrapling)
-            text_content = page.get_all_text(strip=True, ignore_tags=('script', 'style', 'nav', 'header', 'footer'))
-            text_content = str(text_content) if text_content else ""
-            logger.info(f"Extracted text content length: {len(text_content)}")
-        except Exception as e:
-            logger.error(f"Error getting text: {e}")
-        
-        try:
-            # Get HTML content
-            html_content = page.html_content if hasattr(page, 'html_content') else ""
-            html_content = str(html_content) if html_content else ""
-        except Exception as e:
-            logger.error(f"Error getting HTML: {e}")
-        
-        # Create markdown from text content
-        markdown_content = ""
-        if text_content:
-            # Simple markdown formatting
-            markdown_content = f"# {title}\n\n"
-            if description:
-                markdown_content += f"{description}\n\n"
-            markdown_content += text_content
-        else:
-            logger.warning(f"No text content extracted for {url}")
-        
-        # Extract links
-        links = []
-        try:
-            link_elements = page.css('a::attr(href)')
-            links = [link.get() if hasattr(link, 'get') else str(link) for link in link_elements if link]
-            links = [link for link in links if link and isinstance(link, str)][:50]
-        except Exception as e:
-            logger.error(f"Error extracting links: {e}")
-        
-        # Classify URL
-        category = classify_url(url)
-        
-        logger.info(f"Extracted - Title: {title[:50]}, Markdown length: {len(markdown_content)}, Links: {len(links)}")
-        
+
+        title, description, markdown_content, links = _parse_page(page, url)
+
+        logger.info(f"Done: {url} — title={title[:40]!r}, chars={len(markdown_content)}, links={len(links)}")
+
         return {
             'url': url,
             'title': title,
             'description': description,
-            'markdown': markdown_content[:10000],  # Limit to 10KB
-            'category': category,
+            'markdown': markdown_content[:10000],
+            'category': classify_url(url),
             'links': links,
             'status_code': 200,
             'timestamp': datetime.now().isoformat()
         }
-            
+
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout (15s) fetching {url}")
+        return None
     except Exception as e:
-        logger.error(f"Error crawling {url}: {str(e)}")
+        logger.error(f"Error crawling {url}: {e}")
         return None
 
-def crawl_site(start_url, max_pages=20, delay_ms=1000):
-    """Crawl entire site using Scrapling"""
-    logger.info(f"Starting Scrapling crawl of {start_url}, max pages: {max_pages}")
-    
-    crawled = []
-    to_crawl = [start_url]
-    seen = set()  # Don't add start_url to seen initially
+
+async def crawl_site(start_url, max_pages=10):
+    """
+    Two-phase async crawl using a single shared FetcherSession:
+
+      Phase 1 — await the start page to discover links.
+      Phase 2 — await all discovered pages simultaneously via asyncio.gather().
+
+    A single FetcherSession is opened for the entire crawl so every
+    concurrent request reuses the same HTTP connection pool — no
+    re-handshaking, no repeated TLS negotiation.
+    """
+    logger.info(f"Starting async crawl: {start_url}, max_pages={max_pages}")
     base_domain = urlparse(start_url).netloc
-    
-    logger.info(f"Initial crawl queue: {to_crawl}")
-    logger.info(f"Seen URLs: {seen}")
-    logger.info(f"Base domain: {base_domain}")
-    
-    while to_crawl and len(crawled) < max_pages:
-        url = to_crawl.pop(0)
-        logger.info(f"Processing URL from queue: {url}")
-        
-        if url in seen:
-            logger.info(f"URL already seen, skipping: {url}")
-            continue
-            
-        seen.add(url)  # Add to seen AFTER processing, not before
-        logger.info(f"Added URL to seen: {url}")
-        
-        logger.info(f"About to call crawl_page for: {url}")
-        page_data = crawl_page(url)
-        logger.info(f"crawl_page returned: {page_data is not None}")
-        
-        if page_data:
-            crawled.append(page_data)
-            logger.info(f"Successfully crawled page: {url}, total crawled: {len(crawled)}")
-            
-            # Add new links to crawl queue
-            for link in page_data['links']:
-                # Normalize URL and check if it belongs to same domain
-                if link.startswith('http') and base_domain in link:
-                    if link not in seen and len(to_crawl) + len(crawled) < max_pages:
-                        to_crawl.append(link)
-                        logger.info(f"Added absolute link to queue: {link}")
-                elif link.startswith('/'):
-                    # Convert relative URLs to absolute
-                    absolute_url = urljoin(start_url, link)
-                    if absolute_url not in seen and len(to_crawl) + len(crawled) < max_pages:
-                        to_crawl.append(absolute_url)
-                        logger.info(f"Added relative link to queue: {absolute_url}")
-            
-            # Polite delay between requests
-            if delay_ms > 0 and len(crawled) < max_pages:
-                logger.info(f"Waiting {delay_ms}ms before next request")
-                time.sleep(delay_ms / 1000)
-        else:
-            logger.error(f"Failed to crawl page: {url}")
-    
-    logger.info(f"Scrapling crawl completed: {len(crawled)} pages crawled")
-    return crawled
+
+    async with FetcherSession(retries=2) as session:
+
+        # --- Phase 1: fetch the entry page to discover links ---
+        first_page = await crawl_page(session, start_url)
+        if not first_page:
+            logger.error("Failed to fetch start URL — aborting crawl")
+            return []
+
+        results = [first_page]
+        seen = {start_url}
+
+        # Build the list of candidate URLs using a deque (O(1) pops)
+        queue = deque()
+        for link in first_page['links']:
+            if len(queue) + 1 >= max_pages:
+                break
+            if link.startswith('http') and base_domain in link and link not in seen:
+                queue.append(link)
+                seen.add(link)
+            elif link.startswith('/'):
+                abs_url = urljoin(start_url, link)
+                if abs_url not in seen:
+                    queue.append(abs_url)
+                    seen.add(abs_url)
+
+        urls_to_crawl = list(queue)[:max_pages - 1]
+        logger.info(f"Discovered {len(urls_to_crawl)} URLs — firing asyncio.gather()")
+
+        # --- Phase 2: fetch all discovered pages concurrently ---
+        if urls_to_crawl:
+            # return_exceptions=True means one failed page never cancels the rest
+            page_results = await asyncio.gather(
+                *[crawl_page(session, url) for url in urls_to_crawl],
+                return_exceptions=True
+            )
+            for item in page_results:
+                if isinstance(item, Exception):
+                    logger.error(f"Page fetch raised: {item}")
+                elif item is not None:
+                    results.append(item)
+
+    logger.info(f"Crawl complete: {len(results)} pages returned")
+    return results
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '1.0.0',
+        'version': '3.0.0',
         'framework': 'scrapling',
         'fetcher_available': fetcher_available
     })
+
 
 @app.route('/info', methods=['GET'])
 def service_info():
     return jsonify({
         'service': 'AgentEnable Scrapling Service',
-        'version': '1.0.0',
+        'version': '3.0.0',
         'framework': 'scrapling',
-        'description': 'Web crawling service using Scrapling framework',
+        'description': 'Web crawling service using Scrapling FetcherSession (async)',
         'endpoints': {
             '/health': 'Health check',
             '/info': 'Service information',
@@ -226,37 +223,39 @@ def service_info():
         'fetcher_available': fetcher_available
     })
 
+
 @app.route('/crawl', methods=['POST'])
-def start_crawl():
+async def start_crawl():
+    """
+    Async Flask route — requires flask[async] (asgiref) to be installed.
+    Flask runs this coroutine via asgiref so gunicorn gthread workers
+    continue to handle multiple simultaneous callers without change.
+    """
     try:
         if not fetcher_available:
             return jsonify({'error': 'Scrapling not available'}), 500
-            
+
         data = request.get_json()
-        
         if not data or 'url' not in data:
             return jsonify({'error': 'URL is required'}), 400
-        
+
         url = data['url']
-        max_pages = min(data.get('maxPages', 10), 10)  # Max 10 pages
-        delay_ms = data.get('delayMs', 300)  # Reduced to 300ms
-        
-        # Validate URL
+        max_pages = min(data.get('maxPages', 10), 10)
+
         if not url.startswith(('http://', 'https://')):
             return jsonify({'error': 'Invalid URL format'}), 400
-        
-        logger.info(f"Starting crawl: {url}, max_pages: {max_pages}, delay_ms: {delay_ms}")
-        
-        # Run crawl (removed timeout handler as it doesn't work properly with threading)
-        pages = crawl_site(url, max_pages, delay_ms)
-        
-        # Convert to Firecrawl format for compatibility
-        firecrawl_results = []
-        for page in pages:
-            result = {
+
+        logger.info(f"Crawl request: url={url}, max_pages={max_pages}")
+
+        # delayMs accepted for backward compatibility but intentionally ignored
+        pages = await crawl_site(url, max_pages)
+
+        # Return results in Firecrawl-compatible format
+        firecrawl_results = [
+            {
                 'url': page['url'],
-                'markdown': page['markdown'],  # Use native markdown from Scrapling
-                'html': '',  # Not including HTML to save space
+                'markdown': page['markdown'],
+                'html': '',
                 'metadata': {
                     'title': page['title'],
                     'description': page['description'],
@@ -267,10 +266,11 @@ def start_crawl():
                     'timestamp': page['timestamp']
                 }
             }
-            firecrawl_results.append(result)
-        
-        logger.info(f"Crawl completed: {len(firecrawl_results)} pages")
-        
+            for page in pages
+        ]
+
+        logger.info(f"Returning {len(firecrawl_results)} pages to caller")
+
         return jsonify({
             'success': True,
             'results': firecrawl_results,
@@ -278,18 +278,15 @@ def start_crawl():
             'crawled_url': url,
             'framework': 'scrapling'
         })
-        
+
     except Exception as e:
-        logger.error(f"Crawl error: {str(e)}")
+        logger.error(f"Crawl error: {e}")
         return jsonify({'error': str(e)}), 500
 
+
 if __name__ == '__main__':
+    # Local development only — production uses gunicorn (see gunicorn.conf.py)
     port = int(os.environ.get('PORT', 8000))
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
-    
-    logger.info(f"Starting Scrapling service on port {port}")
-    logger.info(f"Debug mode: {debug}")
-    logger.info(f"Scrapling fetcher available: {fetcher_available}")
-    
-    # Ensure the app binds to 0.0.0.0 for Railway
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    logger.info(f"Dev server starting on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=debug, threaded=True)
