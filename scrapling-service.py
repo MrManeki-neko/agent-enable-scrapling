@@ -218,7 +218,8 @@ def service_info():
         'endpoints': {
             '/health': 'Health check',
             '/info': 'Service information',
-            '/crawl': 'POST - Start crawling'
+            '/crawl': 'POST - Crawl a site following links',
+            '/scrape-batch': 'POST - Scrape a list of specific URLs in one session'
         },
         'fetcher_available': fetcher_available
     })
@@ -281,6 +282,113 @@ async def start_crawl():
 
     except Exception as e:
         logger.error(f"Crawl error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/scrape-batch', methods=['POST'])
+async def scrape_batch():
+    """
+    Scrape a specific list of URLs using a single shared FetcherSession.
+
+    All URLs are fetched concurrently via asyncio.gather() — one TLS handshake,
+    one connection pool, maximum reuse. This is the fast path for targeted
+    scraping where the URLs are already known (e.g. from a sitemap).
+
+    Request body:
+      {
+        "urls": ["https://example.com/page1", "https://example.com/page2", ...],
+        "timeout": 20   // optional per-page timeout in seconds, default 20
+      }
+
+    Response mirrors /crawl format so the client needs no special handling.
+    """
+    try:
+        if not fetcher_available:
+            return jsonify({'error': 'Scrapling not available'}), 500
+
+        data = request.get_json()
+        if not data or 'urls' not in data:
+            return jsonify({'error': 'urls array is required'}), 400
+
+        urls = data['urls']
+        if not isinstance(urls, list) or len(urls) == 0:
+            return jsonify({'error': 'urls must be a non-empty array'}), 400
+
+        per_page_timeout = min(int(data.get('timeout', 20)), 60)
+
+        valid_urls = [u for u in urls if isinstance(u, str) and u.startswith(('http://', 'https://'))]
+        if not valid_urls:
+            return jsonify({'error': 'No valid URLs provided'}), 400
+
+        logger.info(f"Batch scrape: {len(valid_urls)} URLs, timeout={per_page_timeout}s each")
+
+        async def fetch_one(session, url):
+            try:
+                page = await asyncio.wait_for(
+                    session.get(url, follow_redirects=True),
+                    timeout=per_page_timeout
+                )
+                if not page:
+                    return None
+                title, description, markdown_content, _ = _parse_page(page, url)
+                return {
+                    'url': url,
+                    'title': title,
+                    'description': description,
+                    'markdown': markdown_content[:10000],
+                    'category': classify_url(url),
+                    'status_code': 200,
+                    'timestamp': datetime.now().isoformat()
+                }
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout ({per_page_timeout}s) fetching {url}")
+                return None
+            except Exception as e:
+                logger.error(f"Error fetching {url}: {e}")
+                return None
+
+        async with FetcherSession(retries=2) as session:
+            raw_results = await asyncio.gather(
+                *[fetch_one(session, url) for url in valid_urls],
+                return_exceptions=True
+            )
+
+        pages = []
+        for item in raw_results:
+            if isinstance(item, Exception):
+                logger.error(f"Batch page raised: {item}")
+            elif item is not None:
+                pages.append(item)
+
+        firecrawl_results = [
+            {
+                'url': page['url'],
+                'markdown': page['markdown'],
+                'html': '',
+                'metadata': {
+                    'title': page['title'],
+                    'description': page['description'],
+                    'sourceURL': page['url'],
+                    'urlCategory': page['category'],
+                    'urlCategoryConfidence': 0.8,
+                    'statusCode': page['status_code'],
+                    'timestamp': page['timestamp']
+                }
+            }
+            for page in pages
+        ]
+
+        logger.info(f"Batch scrape complete: {len(firecrawl_results)}/{len(valid_urls)} pages returned")
+
+        return jsonify({
+            'success': True,
+            'results': firecrawl_results,
+            'total': len(firecrawl_results),
+            'framework': 'scrapling'
+        })
+
+    except Exception as e:
+        logger.error(f"Batch scrape error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
